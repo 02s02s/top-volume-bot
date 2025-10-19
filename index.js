@@ -204,7 +204,7 @@ client.on('interactionCreate', async interaction => {
       if (interaction.commandName === 'volume') {
         const mainEmbed = new EmbedBuilder()
           .setTitle('📊 Top Volume Dashboard')
-          .setDescription('Click a timeframe below to view the Top Volume for USDT perpetual contracts.\n\n**Powered By Bybit**')
+          .setDescription('Click a timeframe below to view the Top Volume for USDT perpetual contracts.')
           .setColor(0x3498db);
         
         const row = new ActionRowBuilder()
@@ -256,4 +256,5 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
 
