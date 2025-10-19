@@ -106,11 +106,11 @@ async function updateVolumeCache() {
       volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
       volumeCache[tf] = volumeData.slice(0, 10);
       
-      console.log(`✓ ${tf} updated - ${volumeData.length} contracts`);
+      console.log(`${tf} updated - ${volumeData.length} contracts`);
     }
     
     lastUpdateTime = new Date();
-    console.log(`✓ update complete at ${lastUpdateTime.toLocaleTimeString()}`);
+    console.log(`update complete at ${lastUpdateTime.toLocaleTimeString()}`);
     console.log('='.repeat(50) + '\n');
   } catch (error) {
     console.error('update failed:', error.message);
@@ -167,9 +167,9 @@ function createVolumeEmbed(timeframe, data) {
 }
 
 client.once('ready', async () => {
-  console.log(`\n✓ logged in as ${client.user.tag}`);
-  console.log(`✓ bot id: ${client.user.id}`);
-  console.log(`✓ connected to ${client.guilds.cache.size} server(s)\n`);
+  console.log(`\nlogged in as ${client.user.tag}`);
+  console.log(`bot id: ${client.user.id}`);
+  console.log(`connected to ${client.guilds.cache.size} server(s)\n`);
   
   const commands = [
     {
@@ -180,7 +180,7 @@ client.once('ready', async () => {
   
   try {
     await client.application.commands.set(commands);
-    console.log('✓ commands synced\n');
+    console.log('commands synced\n');
   } catch (error) {
     console.error('failed to sync commands:', error.message);
   }
@@ -192,7 +192,7 @@ client.once('ready', async () => {
 
 process.on('unhandledRejection', (error) => {
   if (error.code === 10062) {
-    console.log('⚠ interaction expired (button from before restart)');
+    console.log('interaction expired (button from before restart)');
   } else {
     console.error('unhandled rejection:', error);
   }
@@ -256,3 +256,4 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
