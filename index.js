@@ -11,14 +11,18 @@ client.on('error', (error) => {
 });
 
 const volumeCache = {
-  topVolume: []
+  '5m': [],
+  '15m': [],
+  '1h': [],
+  '4h': [],
+  '1d': []
 };
 
 let lastUpdateTime = null;
 
 const BYBIT_BASE = 'https://api.bybit.com';
 
-async function fetchVolumeData() {
+async function fetchVolumeData(timeframe) {
   const response = await axios.get(`${BYBIT_BASE}/v5/market/tickers`, {
     params: { category: 'linear' }
   });
@@ -26,27 +30,62 @@ async function fetchVolumeData() {
   const volumeData = [];
   
   if (response.data?.result?.list) {
-    response.data.result.list.forEach(ticker => {
-      const symbol = ticker.symbol;
-      const lastPriceStr = ticker.lastPrice;
-      const volume24hStr = ticker.turnover24h;
-      const priceChangeStr = ticker.price24hPcnt;
+    // get kline data to calculate volume for specific timeframe
+    const symbols = response.data.result.list
+      .filter(t => t.symbol && t.lastPrice)
+      .map(t => t.symbol);
+    
+    // process in batches to avoid overwhelming the api
+    const batchSize = 50;
+    for (let i = 0; i < symbols.length; i += batchSize) {
+      const batch = symbols.slice(i, i + batchSize);
       
-      if (symbol && lastPriceStr && volume24hStr) {
-        const lastPrice = parseFloat(lastPriceStr);
-        const volume24h = parseFloat(volume24hStr);
-        const priceChange = parseFloat(priceChangeStr || 0) * 100;
-        
-        if (volume24h > 0) {
-          volumeData.push({
-            symbol,
-            lastPrice,
-            volume24h,
-            priceChange
+      const promises = batch.map(async symbol => {
+        try {
+          const ticker = response.data.result.list.find(t => t.symbol === symbol);
+          const lastPrice = parseFloat(ticker.lastPrice);
+          const priceChange = parseFloat(ticker.price24hPcnt || 0) * 100;
+          
+          // get volume for specific timeframe using klines
+          const intervalMap = {
+            '5m': '1',
+            '15m': '5',
+            '1h': '15',
+            '4h': '60',
+            '1d': '240'
+          };
+          
+          const klineResponse = await axios.get(`${BYBIT_BASE}/v5/market/kline`, {
+            params: {
+              category: 'linear',
+              symbol: symbol,
+              interval: intervalMap[timeframe],
+              limit: 1
+            }
           });
+          
+          if (klineResponse.data?.result?.list?.[0]) {
+            const kline = klineResponse.data.result.list[0];
+            const volumeTimeframe = parseFloat(kline[5]); // volume in quote currency
+            
+            return {
+              symbol,
+              lastPrice,
+              volumeTimeframe,
+              priceChange
+            };
+          }
+        } catch (err) {
+          return null;
         }
-      }
-    });
+        return null;
+      });
+      
+      const results = await Promise.all(promises);
+      volumeData.push(...results.filter(r => r !== null && r.volumeTimeframe > 0));
+      
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
   }
   
   return volumeData;
@@ -58,16 +97,20 @@ async function updateVolumeCache() {
   console.log('='.repeat(50));
   
   try {
-    const allVolume = await fetchVolumeData();
-    console.log(`fetched ${allVolume.length} contracts with volume data`);
+    const timeframes = ['5m', '15m', '1h', '4h', '1d'];
     
-    allVolume.sort((a, b) => b.volume24h - a.volume24h);
-    
-    volumeCache.topVolume = allVolume.slice(0, 20);
+    for (const tf of timeframes) {
+      console.log(`fetching ${tf} volume data...`);
+      const volumeData = await fetchVolumeData(tf);
+      
+      volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
+      volumeCache[tf] = volumeData.slice(0, 10);
+      
+      console.log(`✓ ${tf} updated - ${volumeData.length} contracts`);
+    }
     
     lastUpdateTime = new Date();
-    const topVol = volumeCache.topVolume[0];
-    console.log(`✓ top volume: ${topVol.symbol} with $${(topVol.volume24h / 1000000).toFixed(2)}M`);
+    console.log(`✓ update complete at ${lastUpdateTime.toLocaleTimeString()}`);
     console.log('='.repeat(50) + '\n');
   } catch (error) {
     console.error('update failed:', error.message);
@@ -92,10 +135,8 @@ function formatPrice(price) {
   return `$${price.toFixed(6)}`.replace(/\.?0+$/, '');
 }
 
-function createVolumeEmbed(title, data) {
-  const lines = data.map((item, idx) => {
-    const rank = (idx + 1).toString().padStart(2);
-    
+function createVolumeEmbed(timeframe, data) {
+  const lines = data.map((item) => {
     let symbolDisplay = item.symbol.replace('USDT', '');
     if (symbolDisplay.endsWith('PERP')) {
       symbolDisplay = symbolDisplay.slice(0, -4);
@@ -103,17 +144,13 @@ function createVolumeEmbed(title, data) {
     symbolDisplay = symbolDisplay.padEnd(12);
     
     const priceStr = formatPrice(item.lastPrice).padEnd(12);
-    const volumeStr = formatVolume(item.volume24h).padStart(10);
+    const volumeStr = formatVolume(item.volumeTimeframe);
     
-    const sign = item.priceChange >= 0 ? '+' : '';
-    const changeEmoji = item.priceChange >= 0 ? '📈' : '📉';
-    const changeStr = `${sign}${item.priceChange.toFixed(2)}%`;
-    
-    return `${rank}. ${symbolDisplay} ${priceStr} │ ${volumeStr} ${changeEmoji} ${changeStr}`;
+    return `${symbolDisplay} ${priceStr} 📊 ${volumeStr}`;
   }).join('\n');
   
   const embed = new EmbedBuilder()
-    .setTitle(title)
+    .setTitle(`Top 10 Volume (${timeframe})`)
     .setDescription('```\n' + lines + '\n```')
     .setColor(0x3498db);
   
@@ -123,7 +160,7 @@ function createVolumeEmbed(title, data) {
       minute: '2-digit',
       hour12: true
     });
-    embed.setFooter({ text: `Powered by Bybit • Updates every 2min • Last update: ${timeStr}` });
+    embed.setFooter({ text: `Powered by Bybit • Updates every 5min • Last update: ${timeStr}` });
   }
   
   return embed;
@@ -137,7 +174,7 @@ client.once('ready', async () => {
   const commands = [
     {
       name: 'volume',
-      description: 'Show top 20 contracts by 24h trading volume'
+      description: 'Show top 10 contracts by trading volume for different timeframes'
     }
   ];
   
@@ -150,12 +187,12 @@ client.once('ready', async () => {
   
   await updateVolumeCache();
   
-  setInterval(updateVolumeCache, 2 * 60 * 1000);
+  setInterval(updateVolumeCache, 5 * 60 * 1000);
 });
 
 process.on('unhandledRejection', (error) => {
   if (error.code === 10062) {
-    console.log('interaction expired (button from before restart)');
+    console.log('⚠ interaction expired (button from before restart)');
   } else {
     console.error('unhandled rejection:', error);
   }
@@ -167,15 +204,16 @@ client.on('interactionCreate', async interaction => {
       if (interaction.commandName === 'volume') {
         const mainEmbed = new EmbedBuilder()
           .setTitle('📊 Top Volume Dashboard')
-          .setDescription('Click the button below to view the top 20 contracts by 24h trading volume')
+          .setDescription('Click a timeframe below to view the Top Volume for USDT perpetual contracts.\n\n**Powered By Bybit**')
           .setColor(0x3498db);
         
         const row = new ActionRowBuilder()
           .addComponents(
-            new ButtonBuilder()
-              .setCustomId('top_volume')
-              .setLabel('Top 20 by Volume')
-              .setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('volume_5m').setLabel('5m').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('volume_15m').setLabel('15m').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('volume_1h').setLabel('1h').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('volume_4h').setLabel('4h').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('volume_1d').setLabel('1d').setStyle(ButtonStyle.Primary)
           );
         
         if (!interaction.replied && !interaction.deferred) {
@@ -185,20 +223,21 @@ client.on('interactionCreate', async interaction => {
     }
     
     if (interaction.isButton()) {
-      if (interaction.customId === 'top_volume') {
-        const data = volumeCache.topVolume;
+      if (interaction.customId.startsWith('volume_')) {
+        const timeframe = interaction.customId.replace('volume_', '');
+        const data = volumeCache[timeframe];
         
         if (!data || data.length === 0) {
           if (!interaction.replied && !interaction.deferred) {
             return interaction.reply({
-              content: 'Data is still loading, please wait...',
+              content: '⏳ Data is still loading, please wait...',
               ephemeral: true
             });
           }
           return;
         }
         
-        const embed = createVolumeEmbed('Top 20 Contracts by 24h Volume', data);
+        const embed = createVolumeEmbed(timeframe, data);
         
         if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({ embeds: [embed], ephemeral: true });
@@ -207,9 +246,9 @@ client.on('interactionCreate', async interaction => {
     }
   } catch (error) {
     if (error.code === 10062 || error.code === 40060) {
-      console.log('interaction expired (button too old or bot restarted)');
+      console.log('⚠ interaction expired (button too old or bot restarted)');
     } else if (error.message?.includes('Unknown interaction')) {
-      console.log('interaction already handled or expired');
+      console.log('⚠ interaction already handled or expired');
     } else {
       console.error('interaction error:', error.message);
     }
