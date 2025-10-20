@@ -322,8 +322,8 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'volume') {
         const mainEmbed = new EmbedBuilder()
-          .setTitle('📊 Volume Scanner')
-          .setDescription('**Green buttons**: Coins with highest volume spikes in the selected timeframe\n**Red buttons**: Coins with lowest volume in the selected timeframe\n\n*Bybit perpetual futures only • Excludes major coins (BTC, ETH, SOL, etc.)*')
+          .setTitle('📊 Top Volume Dashboard')
+          .setDescription('Click a timeframe below to view the Top Volume for USDT perpetual contracts')
           .setColor(0x3498db);
         
 		const row1 = new ActionRowBuilder().addComponents(
@@ -390,3 +390,4 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
