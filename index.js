@@ -18,11 +18,21 @@ const volumeCache = {
   '1d': { topVolume: [], lowVolume: [] }
 };
 
+let excludedBaseCoins = new Set();
+let volumeHistory1d = [];
 let lastUpdateTime = null;
 
 const BYBIT_BASE = 'https://api.bybit.com';
 
-async function fetchVolumeData(timeframe) {
+function getBaseCoin(symbol) {
+  let base = symbol.replace('USDT', '').replace('PERP', '');
+  if (base.startsWith('1000')) {
+    base = base.substring(4);
+  }
+  return base;
+}
+
+async function fetchVolumeData(timeframe, targetTimestamp = null) {
   const response = await axios.get(`${BYBIT_BASE}/v5/market/tickers`, {
     params: { category: 'linear' }
   });
@@ -33,9 +43,8 @@ async function fetchVolumeData(timeframe) {
     const perpetualSymbols = response.data.result.list
       .filter(t => {
         if (!t.symbol || !t.lastPrice) return false;
-        if (!t.symbol.endsWith('USDT') && !t.symbol.endsWith('PERP')) return false;
+        if (!t.symbol.endsWith('USDT')) return false; // only USDT perpetuals
         if (/-\d{2}[A-Z]{3}\d{2}/.test(t.symbol)) return false;
-        
         return true;
       })
       .map(t => t.symbol);
@@ -49,24 +58,30 @@ async function fetchVolumeData(timeframe) {
           const ticker = response.data.result.list.find(t => t.symbol === symbol);
           const lastPrice = parseFloat(ticker.lastPrice);
           const priceChange = parseFloat(ticker.price24hPcnt || 0) * 100;
+          const volume24h = parseFloat(ticker.turnover24h || 0); // turnover is already in USDT
           
           const intervalMap = {
-            '5m': { interval: '1', limit: 5 },     
-            '15m': { interval: '5', limit: 3 },     
-            '1h': { interval: '15', limit: 4 },   
-            '4h': { interval: '60', limit: 4 },   
+            '5m': { interval: '1', limit: 5 },
+            '15m': { interval: '5', limit: 3 },
+            '1h': { interval: '15', limit: 4 },
+            '4h': { interval: '60', limit: 4 },
             '1d': { interval: 'D', limit: 1 }
           };
           
           const config = intervalMap[timeframe];
+          const klineParams = {
+            category: 'linear',
+            symbol: symbol,
+            interval: config.interval,
+            limit: config.limit
+          };
+          
+          if (targetTimestamp) {
+            klineParams.end = targetTimestamp;
+          }
           
           const klineResponse = await axios.get(`${BYBIT_BASE}/v5/market/kline`, {
-            params: {
-              category: 'linear',
-              symbol: symbol,
-              interval: config.interval,
-              limit: config.limit
-            }
+            params: klineParams
           });
           
           if (klineResponse.data?.result?.list && klineResponse.data.result.list.length >= config.limit) {
@@ -78,6 +93,7 @@ async function fetchVolumeData(timeframe) {
               symbol,
               lastPrice,
               volumeTimeframe,
+              volume24h,
               priceChange
             };
           }
@@ -97,6 +113,60 @@ async function fetchVolumeData(timeframe) {
   return volumeData;
 }
 
+function shouldExcludeCoin(symbol) {
+  const baseCoin = getBaseCoin(symbol);
+  return excludedBaseCoins.has(baseCoin);
+}
+
+async function backfillHistory() {
+  console.log('\n' + '='.repeat(50));
+  console.log('backfilling 7 days of 1d volume history...');
+  console.log('='.repeat(50));
+  
+  for (let daysAgo = 1; daysAgo <= 7; daysAgo++) {
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() - daysAgo);
+    targetDate.setHours(12, 0, 0, 0);
+    const timestamp = targetDate.getTime();
+    
+    console.log(`fetching 1d volume for ${targetDate.toDateString()}...`);
+    
+    try {
+      const volumeData = await fetchVolumeData('1d', timestamp);
+      volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
+      
+      const top15Symbols = volumeData.slice(0, 15).map(v => v.symbol);
+      volumeHistory1d.push({
+        timestamp: timestamp,
+        coins: top15Symbols
+      });
+      
+      console.log(`  ✓ ${top15Symbols.length} coins tracked`);
+    } catch (error) {
+      console.log(`  ✗ failed - ${error.message}`);
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  
+  const baseCoinCounts = {};
+  volumeHistory1d.forEach(record => {
+    record.coins.forEach(symbol => {
+      const baseCoin = getBaseCoin(symbol);
+      baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
+    });
+  });
+  
+  Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
+    if (count >= 5) {
+      excludedBaseCoins.add(baseCoin);
+    }
+  });
+  
+  console.log(`\n✓ backfill complete! ${excludedBaseCoins.size} coins will be excluded`);
+  console.log('='.repeat(50) + '\n');
+}
+
 async function updateVolumeCache() {
   console.log('\n' + '='.repeat(50));
   console.log(`updating volume data at ${new Date().toLocaleTimeString()}`);
@@ -108,13 +178,41 @@ async function updateVolumeCache() {
     for (const tf of timeframes) {
       console.log(`fetching ${tf} volume data...`);
       const volumeData = await fetchVolumeData(tf);
-      
       volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
       
-      volumeCache[tf].topVolume = volumeData.slice(0, 10);
-      volumeCache[tf].lowVolume = volumeData.slice(-10).reverse(); // lowest 10, reversed
+      if (tf === '1d') {
+        const top15Symbols = volumeData.slice(0, 15).map(v => v.symbol);
+        volumeHistory1d.push({
+          timestamp: Date.now(),
+          coins: top15Symbols
+        });
+        
+        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        volumeHistory1d = volumeHistory1d.filter(record => record.timestamp >= sevenDaysAgo);
+        
+        const baseCoinCounts = {};
+        volumeHistory1d.forEach(record => {
+          record.coins.forEach(symbol => {
+            const baseCoin = getBaseCoin(symbol);
+            baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
+          });
+        });
+        
+        excludedBaseCoins.clear();
+        Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
+          if (count >= 5) {
+            excludedBaseCoins.add(baseCoin);
+          }
+        });
+      }
       
-      console.log(`✓ ${tf} updated - ${volumeData.length} contracts`);
+      const filteredData = volumeData.filter(coin => !shouldExcludeCoin(coin.symbol));
+      
+      volumeCache[tf].topVolume = filteredData.slice(0, 10);
+      volumeCache[tf].lowVolume = filteredData.slice(-10).reverse();
+      
+      const excluded = volumeData.length - filteredData.length;
+      console.log(`✓ ${tf} updated - ${volumeData.length} contracts (${excluded} regulars excluded)`);
     }
     
     lastUpdateTime = new Date();
@@ -153,12 +251,21 @@ function createVolumeEmbed(timeframe, data, isHighVolume) {
     if (symbolDisplay.endsWith('PERP')) {
       symbolDisplay = symbolDisplay.slice(0, -4);
     }
+    
+    // safety check: if symbol processing resulted in empty/invalid, use original
+    if (!symbolDisplay || symbolDisplay.length < 2) {
+      symbolDisplay = item.symbol;
+    }
+    
     symbolDisplay = symbolDisplay.padEnd(12);
     
-    const priceStr = formatPrice(item.lastPrice).padEnd(12);
-    const volumeStr = formatVolume(item.volumeTimeframe);
+    const priceStr = formatPrice(item.lastPrice).padEnd(10);
+    const volumeStr = formatVolume(item.volume24h).padEnd(12);
     
-    return `${symbolDisplay} ${priceStr} 📊 ${volumeStr}`;
+    const changeSign = item.priceChange >= 0 ? '+' : '';
+    const changeStr = `(${changeSign}${item.priceChange.toFixed(1)}%)`;
+    
+    return `${symbolDisplay} ${priceStr} 📊 ${volumeStr} ${changeStr}`;
   }).join('\n');
   
   const embed = new EmbedBuilder()
@@ -197,6 +304,7 @@ client.once('ready', async () => {
     console.error('failed to sync commands:', error.message);
   }
   
+  await backfillHistory();
   await updateVolumeCache();
   
   setInterval(updateVolumeCache, 5 * 60 * 1000);
@@ -216,11 +324,11 @@ client.on('interactionCreate', async interaction => {
       if (interaction.commandName === 'volume') {
         const mainEmbed = new EmbedBuilder()
           .setTitle('📊 Top Volume Dashboard')
-          .setDescription('Click a timeframe below to view the Top Volume for USDT perpetual contracts.')
+          .setDescription('Click a timeframe below to view the Top Volume for USDT perpetual contracts')
           .setColor(0x3498db);
         
 		const row1 = new ActionRowBuilder().addComponents(
-		  new ButtonBuilder().setCustomId('volume_high_5m').setLabel('5m').setStyle(ButtonStyle.Success), // green
+		  new ButtonBuilder().setCustomId('volume_high_5m').setLabel('5m').setStyle(ButtonStyle.Success),
 		  new ButtonBuilder().setCustomId('volume_high_15m').setLabel('15m').setStyle(ButtonStyle.Success),
 		  new ButtonBuilder().setCustomId('volume_high_1h').setLabel('1h').setStyle(ButtonStyle.Success),
 		  new ButtonBuilder().setCustomId('volume_high_4h').setLabel('4h').setStyle(ButtonStyle.Success),
@@ -228,7 +336,7 @@ client.on('interactionCreate', async interaction => {
 		);
 
 		const row2 = new ActionRowBuilder().addComponents(
-		  new ButtonBuilder().setCustomId('volume_low_5m').setLabel('5m').setStyle(ButtonStyle.Danger), // red
+		  new ButtonBuilder().setCustomId('volume_low_5m').setLabel('5m').setStyle(ButtonStyle.Danger),
 		  new ButtonBuilder().setCustomId('volume_low_15m').setLabel('15m').setStyle(ButtonStyle.Danger),
 		  new ButtonBuilder().setCustomId('volume_low_1h').setLabel('1h').setStyle(ButtonStyle.Danger),
 		  new ButtonBuilder().setCustomId('volume_low_4h').setLabel('4h').setStyle(ButtonStyle.Danger),
@@ -244,8 +352,8 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('volume_')) {
         const parts = interaction.customId.split('_');
-        const volumeType = parts[1]; //
-        const timeframe = parts[2]; //
+        const volumeType = parts[1];
+        const timeframe = parts[2];
         
         const data = volumeType === 'high' 
           ? volumeCache[timeframe]?.topVolume 
