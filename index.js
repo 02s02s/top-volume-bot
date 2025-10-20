@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const axios = require('axios');
 
 const client = new Client({
@@ -43,7 +43,7 @@ async function fetchVolumeData(timeframe, targetTimestamp = null) {
     const perpetualSymbols = response.data.result.list
       .filter(t => {
         if (!t.symbol || !t.lastPrice) return false;
-        if (!t.symbol.endsWith('USDT')) return false; // only USDT perpetuals
+        if (!t.symbol.endsWith('USDT')) return false;
         if (/-\d{2}[A-Z]{3}\d{2}/.test(t.symbol)) return false;
         return true;
       })
@@ -58,7 +58,7 @@ async function fetchVolumeData(timeframe, targetTimestamp = null) {
           const ticker = response.data.result.list.find(t => t.symbol === symbol);
           const lastPrice = parseFloat(ticker.lastPrice);
           const priceChange = parseFloat(ticker.price24hPcnt || 0) * 100;
-          const volume24h = parseFloat(ticker.turnover24h || 0); // turnover is already in USDT
+          const volume24h = parseFloat(ticker.turnover24h || 0);
           
           const intervalMap = {
             '5m': { interval: '1', limit: 5 },
@@ -252,7 +252,6 @@ function createVolumeEmbed(timeframe, data, isHighVolume) {
       symbolDisplay = symbolDisplay.slice(0, -4);
     }
     
-    // safety check: if symbol processing resulted in empty/invalid, use original
     if (!symbolDisplay || symbolDisplay.length < 2) {
       symbolDisplay = item.symbol;
     }
@@ -260,7 +259,7 @@ function createVolumeEmbed(timeframe, data, isHighVolume) {
     symbolDisplay = symbolDisplay.padEnd(12);
     
     const priceStr = formatPrice(item.lastPrice).padEnd(10);
-    const volumeStr = formatVolume(item.volume24h).padEnd(12);
+    const volumeStr = formatVolume(item.volumeTimeframe).padEnd(12); // uses time specific not 24h anymore ok
     
     const changeSign = item.priceChange >= 0 ? '+' : '';
     const changeStr = `(${changeSign}${item.priceChange.toFixed(1)}%)`;
@@ -323,8 +322,8 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'volume') {
         const mainEmbed = new EmbedBuilder()
-          .setTitle('📊 Top Volume Dashboard')
-          .setDescription('Click a timeframe below to view the Top Volume for USDT perpetual contracts')
+          .setTitle('📊 Volume Scanner')
+          .setDescription('**Green buttons**: Coins with highest volume spikes in the selected timeframe\n**Red buttons**: Coins with lowest volume in the selected timeframe\n\n*Bybit perpetual futures only • Excludes major coins (BTC, ETH, SOL, etc.)*')
           .setColor(0x3498db);
         
 		const row1 = new ActionRowBuilder().addComponents(
@@ -363,7 +362,7 @@ client.on('interactionCreate', async interaction => {
           if (!interaction.replied && !interaction.deferred) {
             return interaction.reply({
               content: 'Data is still loading, please wait...',
-              ephemeral: true
+              flags: MessageFlags.Ephemeral
             });
           }
           return;
@@ -372,7 +371,10 @@ client.on('interactionCreate', async interaction => {
         const embed = createVolumeEmbed(timeframe, data, volumeType === 'high');
         
         if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({ embeds: [embed], ephemeral: true });
+          await interaction.reply({ 
+            embeds: [embed], 
+            flags: MessageFlags.Ephemeral 
+          });
         }
       }
     }
