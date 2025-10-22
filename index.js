@@ -21,6 +21,7 @@ const volumeCache = {
 let excludedBaseCoins = new Set();
 let volumeHistory1d = [];
 let lastUpdateTime = null;
+let lastDailyCheck = null; // track when we last did the daily exclusion update
 
 const BYBIT_BASE = 'https://api.bybit.com';
 
@@ -135,13 +136,13 @@ async function backfillHistory() {
       const volumeData = await fetchVolumeData('1d', timestamp);
       volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
       
-      const top15Symbols = volumeData.slice(0, 15).map(v => v.symbol);
+      const top10Symbols = volumeData.slice(0, 10).map(v => v.symbol);
       volumeHistory1d.push({
         timestamp: timestamp,
-        coins: top15Symbols
+        coins: top10Symbols
       });
       
-      console.log(`  ✓ ${top15Symbols.length} coins tracked`);
+      console.log(`  ✓ ${top10Symbols.length} coins tracked`);
     } catch (error) {
       console.log(`  ✗ failed - ${error.message}`);
     }
@@ -158,7 +159,7 @@ async function backfillHistory() {
   });
   
   Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
-    if (count >= 5) {
+    if (count === 7) { // must appear all 7 days
       excludedBaseCoins.add(baseCoin);
     }
   });
@@ -181,37 +182,48 @@ async function updateVolumeCache() {
       volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
       
       if (tf === '1d') {
-        const top15Symbols = volumeData.slice(0, 15).map(v => v.symbol);
-        volumeHistory1d.push({
-          timestamp: Date.now(),
-          coins: top15Symbols
-        });
-        
-        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-        volumeHistory1d = volumeHistory1d.filter(record => record.timestamp >= sevenDaysAgo);
-        
-        const baseCoinCounts = {};
-        volumeHistory1d.forEach(record => {
-          record.coins.forEach(symbol => {
-            const baseCoin = getBaseCoin(symbol);
-            baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
+        // only update daily tracking once per day
+        const today = new Date().toDateString();
+        if (!lastDailyCheck || lastDailyCheck !== today) {
+          const top10Symbols = volumeData.slice(0, 10).map(v => v.symbol);
+          volumeHistory1d.push({
+            timestamp: Date.now(),
+            coins: top10Symbols
           });
-        });
-        
-        excludedBaseCoins.clear();
-        Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
-          if (count >= 5) {
-            excludedBaseCoins.add(baseCoin);
-          }
-        });
+          
+          lastDailyCheck = today;
+          console.log(`  ✓ daily exclusion check done for ${today}`);
+          
+          // keep only last 7 days
+          const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+          volumeHistory1d = volumeHistory1d.filter(record => record.timestamp >= sevenDaysAgo);
+          
+          // recalculate exclusions
+          const baseCoinCounts = {};
+          volumeHistory1d.forEach(record => {
+            record.coins.forEach(symbol => {
+              const baseCoin = getBaseCoin(symbol);
+              baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
+            });
+          });
+          
+          excludedBaseCoins.clear();
+          Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
+            if (count === 7) { // must appear all 7 days
+              excludedBaseCoins.add(baseCoin);
+            }
+          });
+          
+          console.log(`  ✓ ${excludedBaseCoins.size} coins excluded (appear in top 10 all 7 days)`);
+        }
       }
       
       const filteredData = volumeData.filter(coin => !shouldExcludeCoin(coin.symbol));
       
-
+      // top volume stays the same
       volumeCache[tf].topVolume = filteredData.slice(0, 10);
       
-      // ok new update, selling pressure: filter negative price change, sort by volume (highest first)
+      // selling pressure: filter negative price change, sort by volume (highest first)
       const sellingPressureData = filteredData
         .filter(coin => coin.priceChange < 0)
         .sort((a, b) => b.volumeTimeframe - a.volumeTimeframe)
