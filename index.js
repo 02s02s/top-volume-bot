@@ -11,11 +11,11 @@ client.on('error', (error) => {
 });
 
 const volumeCache = {
-  '5m': { topVolume: [], lowVolume: [] },
-  '15m': { topVolume: [], lowVolume: [] },
-  '1h': { topVolume: [], lowVolume: [] },
-  '4h': { topVolume: [], lowVolume: [] },
-  '1d': { topVolume: [], lowVolume: [] }
+  '5m': { topVolume: [], sellingPressure: [] },
+  '15m': { topVolume: [], sellingPressure: [] },
+  '1h': { topVolume: [], sellingPressure: [] },
+  '4h': { topVolume: [], sellingPressure: [] },
+  '1d': { topVolume: [], sellingPressure: [] }
 };
 
 let excludedBaseCoins = new Set();
@@ -208,8 +208,16 @@ async function updateVolumeCache() {
       
       const filteredData = volumeData.filter(coin => !shouldExcludeCoin(coin.symbol));
       
+
       volumeCache[tf].topVolume = filteredData.slice(0, 10);
-      volumeCache[tf].lowVolume = filteredData.slice(-10).reverse();
+      
+      // ok new update, selling pressure: filter negative price change, sort by volume (highest first)
+      const sellingPressureData = filteredData
+        .filter(coin => coin.priceChange < 0)
+        .sort((a, b) => b.volumeTimeframe - a.volumeTimeframe)
+        .slice(0, 10);
+      
+      volumeCache[tf].sellingPressure = sellingPressureData;
       
       const excluded = volumeData.length - filteredData.length;
       console.log(`✓ ${tf} updated - ${volumeData.length} contracts (${excluded} regulars excluded)`);
@@ -244,7 +252,7 @@ function formatPrice(price) {
 function createVolumeEmbed(timeframe, data, isHighVolume) {
   const title = isHighVolume 
     ? `Top 10 Volume (${timeframe})`
-    : `Top 10 Lowest Volume (${timeframe})`;
+    : `Top 10 Selling Pressure (${timeframe})`;
   
   const lines = data.map((item) => {
     let symbolDisplay = item.symbol.replace('USDT', '');
@@ -259,7 +267,7 @@ function createVolumeEmbed(timeframe, data, isHighVolume) {
     symbolDisplay = symbolDisplay.padEnd(12);
     
     const priceStr = formatPrice(item.lastPrice).padEnd(10);
-    const volumeStr = formatVolume(item.volumeTimeframe).padEnd(12); // uses time specific not 24h anymore ok
+    const volumeStr = formatVolume(item.volumeTimeframe).padEnd(12);
     
     const changeSign = item.priceChange >= 0 ? '+' : '';
     const changeStr = `(${changeSign}${item.priceChange.toFixed(1)}%)`;
@@ -292,7 +300,7 @@ client.once('ready', async () => {
   const commands = [
     {
       name: 'volume',
-      description: 'Show top 10 highest and lowest volume contracts for different timeframes'
+      description: 'Show top volume and selling pressure for different timeframes'
     }
   ];
   
@@ -322,8 +330,8 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'volume') {
         const mainEmbed = new EmbedBuilder()
-          .setTitle('📊 Top Volume Dashboard')
-          .setDescription('Click a timeframe below to view the Top Volume for USDT perpetual contracts')
+          .setTitle('📊 Volume & Selling Pressure Dashboard')
+          .setDescription('Green buttons = Top Volume | Red buttons = Top Selling Pressure (high volume dumps)')
           .setColor(0x3498db);
         
 		const row1 = new ActionRowBuilder().addComponents(
@@ -335,11 +343,11 @@ client.on('interactionCreate', async interaction => {
 		);
 
 		const row2 = new ActionRowBuilder().addComponents(
-		  new ButtonBuilder().setCustomId('volume_low_5m').setLabel('5m').setStyle(ButtonStyle.Danger),
-		  new ButtonBuilder().setCustomId('volume_low_15m').setLabel('15m').setStyle(ButtonStyle.Danger),
-		  new ButtonBuilder().setCustomId('volume_low_1h').setLabel('1h').setStyle(ButtonStyle.Danger),
-		  new ButtonBuilder().setCustomId('volume_low_4h').setLabel('4h').setStyle(ButtonStyle.Danger),
-		  new ButtonBuilder().setCustomId('volume_low_1d').setLabel('1d').setStyle(ButtonStyle.Danger)
+		  new ButtonBuilder().setCustomId('volume_sell_5m').setLabel('5m').setStyle(ButtonStyle.Danger),
+		  new ButtonBuilder().setCustomId('volume_sell_15m').setLabel('15m').setStyle(ButtonStyle.Danger),
+		  new ButtonBuilder().setCustomId('volume_sell_1h').setLabel('1h').setStyle(ButtonStyle.Danger),
+		  new ButtonBuilder().setCustomId('volume_sell_4h').setLabel('4h').setStyle(ButtonStyle.Danger),
+		  new ButtonBuilder().setCustomId('volume_sell_1d').setLabel('1d').setStyle(ButtonStyle.Danger)
 		);
 		
         if (!interaction.replied && !interaction.deferred) {
@@ -356,7 +364,7 @@ client.on('interactionCreate', async interaction => {
         
         const data = volumeType === 'high' 
           ? volumeCache[timeframe]?.topVolume 
-          : volumeCache[timeframe]?.lowVolume;
+          : volumeCache[timeframe]?.sellingPressure;
         
         if (!data || data.length === 0) {
           if (!interaction.replied && !interaction.deferred) {
