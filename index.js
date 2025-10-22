@@ -11,11 +11,11 @@ client.on('error', (error) => {
 });
 
 const volumeCache = {
-  '5m': { topVolume: [], topLosingVolume: [] },
-  '15m': { topVolume: [], topLosingVolume: [] },
-  '1h': { topVolume: [], topLosingVolume: [] },
-  '4h': { topVolume: [], topLosingVolume: [] },
-  '1d': { topVolume: [], topLosingVolume: [] }
+  '5m': { topVolumeGaining: [], topVolumeLosing: [] },
+  '15m': { topVolumeGaining: [], topVolumeLosing: [] },
+  '1h': { topVolumeGaining: [], topVolumeLosing: [] },
+  '4h': { topVolumeGaining: [], topVolumeLosing: [] },
+  '1d': { topVolumeGaining: [], topVolumeLosing: [] }
 };
 
 let excludedBaseCoins = new Set();
@@ -183,13 +183,13 @@ async function backfillHistory() {
       const volumeData = await fetchVolumeData('1d', timestamp);
       volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
       
-      const top15Symbols = volumeData.slice(0, 15).map(v => v.symbol);
+      const top20Symbols = volumeData.slice(0, 20).map(v => v.symbol);
       volumeHistory1d.push({
         timestamp: timestamp,
-        coins: top15Symbols
+        coins: top20Symbols
       });
       
-      console.log(`  ✓ ${top15Symbols.length} coins tracked`);
+      console.log(`  ✓ ${top20Symbols.length} coins tracked`);
     } catch (error) {
       console.log(`  ✗ failed - ${error.message}`);
     }
@@ -229,11 +229,11 @@ async function updateVolumeCache() {
       
       if (tf === '1d') {
         const sortedForHistory = [...volumeData].sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
-        const top15Symbols = sortedForHistory.slice(0, 15).map(v => v.symbol);
+        const top20Symbols = sortedForHistory.slice(0, 20).map(v => v.symbol);
         
         volumeHistory1d.push({
           timestamp: Date.now(),
-          coins: top15Symbols
+          coins: top20Symbols
         });
         
         const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
@@ -257,14 +257,17 @@ async function updateVolumeCache() {
       
       const allSortedData = volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
       
-      const topVolumeFiltered = allSortedData.filter(coin => !shouldExcludeCoin(coin.symbol));
-      volumeCache[tf].topVolume = topVolumeFiltered.slice(0, 10);
+      // green buttons: top 10 volume AND increasing (positive price change)
+      const topVolumeGaining = allSortedData
+        .filter(coin => !shouldExcludeCoin(coin.symbol))
+        .filter(coin => coin.priceChange > 0);
+      volumeCache[tf].topVolumeGaining = topVolumeGaining.slice(0, 10);
 
-      const topLosersFiltered = allSortedData
+      // red buttons: top 10 volume AND decreasing (negative price change)
+      const topVolumeLosing = allSortedData
         .filter(coin => !shouldExcludeCoin(coin.symbol))
         .filter(coin => coin.priceChange < 0); 
-      
-      volumeCache[tf].topLosingVolume = topLosersFiltered.slice(0, 10);
+      volumeCache[tf].topVolumeLosing = topVolumeLosing.slice(0, 10);
       
       const excluded = allSortedData.length - allSortedData.filter(coin => !shouldExcludeCoin(coin.symbol)).length;
       console.log(`✓ ${tf} updated - ${volumeData.length} contracts (${excluded} regulars excluded)`);
@@ -297,9 +300,9 @@ function formatPrice(price) {
 }
 
 function createVolumeEmbed(timeframe, data, volumeType) {
-  const title = volumeType === 'high'
-    ? `Top 10 Volume (${timeframe})`
-    : `Top 10 Volume Losers (${timeframe})`;
+  const title = volumeType === 'gaining'
+    ? `Top 10 Volume + Increasing (${timeframe})`
+    : `Top 10 Volume + Decreasing (${timeframe})`;
   
   const lines = data.map((item) => {
     let symbolDisplay = item.symbol.replace('USDT', '');
@@ -325,7 +328,7 @@ function createVolumeEmbed(timeframe, data, volumeType) {
   const embed = new EmbedBuilder()
     .setTitle(title)
     .setDescription('```\n' + lines + '\n```')
-    .setColor(volumeType === 'high' ? 0x00ff00 : 0xff0000);
+    .setColor(volumeType === 'gaining' ? 0x00ff00 : 0xff0000);
   
   if (lastUpdateTime) {
     const timeStr = lastUpdateTime.toLocaleTimeString('en-US', {
@@ -347,7 +350,7 @@ client.once('ready', async () => {
   const commands = [
     {
       name: 'volume',
-      description: 'Show top 10 highest and lowest volume contracts for different timeframes'
+      description: 'Show top 10 volume contracts that are increasing or decreasing in price'
     }
   ];
   
@@ -378,15 +381,15 @@ client.on('interactionCreate', async interaction => {
       if (interaction.commandName === 'volume') {
         const mainEmbed = new EmbedBuilder()
           .setTitle('📊 Top Volume Dashboard')
-          .setDescription('Click a timeframe below to view Top Volume contracts.\n🟢 Green = Top 10 by Volume (All)\n🔴 Red = Top 10 by Volume (Price Losers)')
+          .setDescription('Click a timeframe below to view coins by volume and price movement.\n🟢 Green = Top 10 Volume + Increasing Price\n🔴 Red = Top 10 Volume + Decreasing Price\n\nExcludes top 20 most consistent volume coins.')
           .setColor(0x3498db);
         
 		const row1 = new ActionRowBuilder().addComponents(
-		  new ButtonBuilder().setCustomId('volume_high_5m').setLabel('5m').setStyle(ButtonStyle.Success),
-		  new ButtonBuilder().setCustomId('volume_high_15m').setLabel('15m').setStyle(ButtonStyle.Success),
-		  new ButtonBuilder().setCustomId('volume_high_1h').setLabel('1h').setStyle(ButtonStyle.Success),
-		  new ButtonBuilder().setCustomId('volume_high_4h').setLabel('4h').setStyle(ButtonStyle.Success),
-		  new ButtonBuilder().setCustomId('volume_high_1d').setLabel('1d').setStyle(ButtonStyle.Success)
+		  new ButtonBuilder().setCustomId('volume_gaining_5m').setLabel('5m').setStyle(ButtonStyle.Success),
+		  new ButtonBuilder().setCustomId('volume_gaining_15m').setLabel('15m').setStyle(ButtonStyle.Success),
+		  new ButtonBuilder().setCustomId('volume_gaining_1h').setLabel('1h').setStyle(ButtonStyle.Success),
+		  new ButtonBuilder().setCustomId('volume_gaining_4h').setLabel('4h').setStyle(ButtonStyle.Success),
+		  new ButtonBuilder().setCustomId('volume_gaining_1d').setLabel('1d').setStyle(ButtonStyle.Success)
 		);
 
 		const row2 = new ActionRowBuilder().addComponents(
@@ -406,17 +409,17 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('volume_')) {
         const parts = interaction.customId.split('_');
-        const volumeType = parts[1];
+        const volumeType = parts[1]; // 'gaining' or 'losing'
         const timeframe = parts[2];
         
-        const data = volumeType === 'high' 
-          ? volumeCache[timeframe]?.topVolume 
-          : volumeCache[timeframe]?.topLosingVolume;
+        const data = volumeType === 'gaining' 
+          ? volumeCache[timeframe]?.topVolumeGaining 
+          : volumeCache[timeframe]?.topVolumeLosing;
         
         if (!data || data.length === 0) {
           if (!interaction.replied && !interaction.deferred) {
             return interaction.reply({
-              content: 'Data is still loading, or no coins match the "loser" criteria for this timeframe. Please wait...',
+              content: 'Data is still loading, or no coins match this criteria for this timeframe. Please wait...',
               flags: MessageFlags.Ephemeral
             });
           }
