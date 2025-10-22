@@ -57,8 +57,48 @@ async function fetchVolumeData(timeframe, targetTimestamp = null) {
         try {
           const ticker = response.data.result.list.find(t => t.symbol === symbol);
           const lastPrice = parseFloat(ticker.lastPrice);
-          const volume24h = parseFloat(ticker.turnover24h || 0);
-          
+          const volume24h_from_ticker = parseFloat(ticker.turnover24h || 0);
+          const priceChange24h_from_ticker = parseFloat(ticker.price24hPcnt || 0) * 100;
+
+          if (timeframe === '1d') {
+            if (targetTimestamp) {
+              const klineParams = {
+                category: 'linear',
+                symbol: symbol,
+                interval: 'D',
+                limit: 1,
+                end: targetTimestamp
+              };
+              const klineResponse = await axios.get(`${BYBIT_BASE}/v5/market/kline`, { params: klineParams });
+              if (klineResponse.data?.result?.list && klineResponse.data.result.list.length >= 1) {
+                const candle = klineResponse.data.result.list[0];
+                const volumeTimeframe = parseFloat(candle[6]);
+                const openPrice = parseFloat(candle[1]);
+                const closePrice = parseFloat(candle[4]);
+                let priceChange = 0;
+                if (openPrice > 0) {
+                  priceChange = ((closePrice - openPrice) / openPrice) * 100;
+                }
+                return {
+                  symbol,
+                  lastPrice: closePrice,
+                  volumeTimeframe,
+                  volume24h: volumeTimeframe,
+                  priceChange
+                };
+              }
+              return null;
+            } else {
+              return {
+                symbol,
+                lastPrice,
+                volumeTimeframe: volume24h_from_ticker,
+                volume24h: volume24h_from_ticker,
+                priceChange: priceChange24h_from_ticker
+              };
+            }
+          }
+
           const intervalMap = {
             '5m': { interval: '1', limit: 5 },
             '15m': { interval: '5', limit: 3 },
@@ -101,7 +141,7 @@ async function fetchVolumeData(timeframe, targetTimestamp = null) {
               symbol,
               lastPrice,
               volumeTimeframe,
-              volume24h,
+              volume24h: volume24h_from_ticker,
               priceChange
             };
           }
@@ -222,7 +262,7 @@ async function updateVolumeCache() {
 
       const topLosersFiltered = allSortedData
         .filter(coin => !shouldExcludeCoin(coin.symbol))
-        .filter(coin => coin.priceChange < 0);
+        .filter(coin => coin.priceChange < 0); 
       
       volumeCache[tf].topLosingVolume = topLosersFiltered.slice(0, 10);
       
