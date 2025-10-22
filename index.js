@@ -21,7 +21,7 @@ const volumeCache = {
 let excludedBaseCoins = new Set();
 let volumeHistory1d = [];
 let lastUpdateTime = null;
-let lastDailyCheck = null; // track when we last did the daily exclusion update
+let lastDailyCheckTime = null;
 
 const BYBIT_BASE = 'https://api.bybit.com';
 
@@ -119,6 +119,29 @@ function shouldExcludeCoin(symbol) {
   return excludedBaseCoins.has(baseCoin);
 }
 
+function updateExclusionList() {
+
+  const baseCoinCounts = {};
+  volumeHistory1d.forEach(record => {
+    record.coins.forEach(symbol => {
+      const baseCoin = getBaseCoin(symbol);
+      baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
+    });
+  });
+  
+  excludedBaseCoins.clear();
+  Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
+    if (count >= 5) {
+      excludedBaseCoins.add(baseCoin);
+    }
+  });
+  
+  console.log(`✓ exclusion list updated: ${excludedBaseCoins.size} coins excluded`);
+  if (excludedBaseCoins.size > 0) {
+    console.log(`  excluded coins: ${Array.from(excludedBaseCoins).join(', ')}`);
+  }
+}
+
 async function backfillHistory() {
   console.log('\n' + '='.repeat(50));
   console.log('backfilling 7 days of 1d volume history...');
@@ -135,7 +158,7 @@ async function backfillHistory() {
     try {
       const volumeData = await fetchVolumeData('1d', timestamp);
       volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
-      
+
       const top10Symbols = volumeData.slice(0, 10).map(v => v.symbol);
       volumeHistory1d.push({
         timestamp: timestamp,
@@ -150,22 +173,42 @@ async function backfillHistory() {
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   
-  const baseCoinCounts = {};
-  volumeHistory1d.forEach(record => {
-    record.coins.forEach(symbol => {
-      const baseCoin = getBaseCoin(symbol);
-      baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
-    });
-  });
+  updateExclusionList();
   
-  Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
-    if (count === 7) { // must appear all 7 days
-      excludedBaseCoins.add(baseCoin);
-    }
-  });
-  
-  console.log(`\n✓ backfill complete! ${excludedBaseCoins.size} coins will be excluded`);
+  console.log(`\n✓ backfill complete!`);
   console.log('='.repeat(50) + '\n');
+}
+
+async function dailyExclusionCheck() {
+  console.log('\n' + '='.repeat(50));
+  console.log(`daily exclusion check at ${new Date().toLocaleTimeString()}`);
+  console.log('='.repeat(50));
+  
+  try {
+    console.log('fetching current 1d volume data...');
+    const volumeData = await fetchVolumeData('1d');
+    volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
+
+    const top10Symbols = volumeData.slice(0, 10).map(v => v.symbol);
+    volumeHistory1d.push({
+      timestamp: Date.now(),
+      coins: top10Symbols
+    });
+    
+    console.log(`✓ added today's top 10: ${top10Symbols.join(', ')}`);
+    
+    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    volumeHistory1d = volumeHistory1d.filter(record => record.timestamp >= sevenDaysAgo);
+    
+    console.log(`✓ keeping ${volumeHistory1d.length} days of history`);
+    updateExclusionList();
+    
+    lastDailyCheckTime = new Date();
+    console.log(`✓ daily check complete at ${lastDailyCheckTime.toLocaleTimeString()}`);
+    console.log('='.repeat(50) + '\n');
+  } catch (error) {
+    console.error('daily check failed:', error.message);
+  }
 }
 
 async function updateVolumeCache() {
@@ -181,46 +224,8 @@ async function updateVolumeCache() {
       const volumeData = await fetchVolumeData(tf);
       volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
       
-      if (tf === '1d') {
-        // only update daily tracking once per day
-        const today = new Date().toDateString();
-        if (!lastDailyCheck || lastDailyCheck !== today) {
-          const top10Symbols = volumeData.slice(0, 10).map(v => v.symbol);
-          volumeHistory1d.push({
-            timestamp: Date.now(),
-            coins: top10Symbols
-          });
-          
-          lastDailyCheck = today;
-          console.log(`  ✓ daily exclusion check done for ${today}`);
-          
-          // keep only last 7 days
-          const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-          volumeHistory1d = volumeHistory1d.filter(record => record.timestamp >= sevenDaysAgo);
-          
-          // recalculate exclusions
-          const baseCoinCounts = {};
-          volumeHistory1d.forEach(record => {
-            record.coins.forEach(symbol => {
-              const baseCoin = getBaseCoin(symbol);
-              baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
-            });
-          });
-          
-          excludedBaseCoins.clear();
-          Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
-            if (count === 7) { // must appear all 7 days
-              excludedBaseCoins.add(baseCoin);
-            }
-          });
-          
-          console.log(`  ✓ ${excludedBaseCoins.size} coins excluded (appear in top 10 all 7 days)`);
-        }
-      }
-      
       const filteredData = volumeData.filter(coin => !shouldExcludeCoin(coin.symbol));
       
-      // top volume stays the same
       volumeCache[tf].topVolume = filteredData.slice(0, 10);
       
       // selling pressure: filter negative price change, sort by volume (highest first)
@@ -322,11 +327,11 @@ client.once('ready', async () => {
   } catch (error) {
     console.error('failed to sync commands:', error.message);
   }
-  
   await backfillHistory();
   await updateVolumeCache();
   
   setInterval(updateVolumeCache, 5 * 60 * 1000);
+  setInterval(dailyExclusionCheck, 24 * 60 * 60 * 1000);
 });
 
 process.on('unhandledRejection', (error) => {
