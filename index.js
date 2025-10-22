@@ -11,17 +11,16 @@ client.on('error', (error) => {
 });
 
 const volumeCache = {
-  '5m': { topVolume: [], sellingPressure: [] },
-  '15m': { topVolume: [], sellingPressure: [] },
-  '1h': { topVolume: [], sellingPressure: [] },
-  '4h': { topVolume: [], sellingPressure: [] },
-  '1d': { topVolume: [], sellingPressure: [] }
+  '5m': { topVolume: [], topLosingVolume: [] },
+  '15m': { topVolume: [], topLosingVolume: [] },
+  '1h': { topVolume: [], topLosingVolume: [] },
+  '4h': { topVolume: [], topLosingVolume: [] },
+  '1d': { topVolume: [], topLosingVolume: [] }
 };
 
 let excludedBaseCoins = new Set();
 let volumeHistory1d = [];
 let lastUpdateTime = null;
-let lastDailyCheckTime = null;
 
 const BYBIT_BASE = 'https://api.bybit.com';
 
@@ -58,7 +57,6 @@ async function fetchVolumeData(timeframe, targetTimestamp = null) {
         try {
           const ticker = response.data.result.list.find(t => t.symbol === symbol);
           const lastPrice = parseFloat(ticker.lastPrice);
-          const priceChange = parseFloat(ticker.price24hPcnt || 0) * 100;
           const volume24h = parseFloat(ticker.turnover24h || 0);
           
           const intervalMap = {
@@ -86,9 +84,18 @@ async function fetchVolumeData(timeframe, targetTimestamp = null) {
           });
           
           if (klineResponse.data?.result?.list && klineResponse.data.result.list.length >= config.limit) {
-            const volumeTimeframe = klineResponse.data.result.list.reduce((sum, candle) => {
+            const candles = klineResponse.data.result.list;
+            
+            const volumeTimeframe = candles.reduce((sum, candle) => {
               return sum + parseFloat(candle[6]);
             }, 0);
+
+            const openPrice = parseFloat(candles[candles.length - 1][1]);
+            const closePrice = parseFloat(candles[0][4]);
+            let priceChange = 0;
+            if (openPrice > 0) {
+              priceChange = ((closePrice - openPrice) / openPrice) * 100;
+            }
             
             return {
               symbol,
@@ -119,29 +126,6 @@ function shouldExcludeCoin(symbol) {
   return excludedBaseCoins.has(baseCoin);
 }
 
-function updateExclusionList() {
-
-  const baseCoinCounts = {};
-  volumeHistory1d.forEach(record => {
-    record.coins.forEach(symbol => {
-      const baseCoin = getBaseCoin(symbol);
-      baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
-    });
-  });
-  
-  excludedBaseCoins.clear();
-  Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
-    if (count >= 5) {
-      excludedBaseCoins.add(baseCoin);
-    }
-  });
-  
-  console.log(`✓ exclusion list updated: ${excludedBaseCoins.size} coins excluded`);
-  if (excludedBaseCoins.size > 0) {
-    console.log(`  excluded coins: ${Array.from(excludedBaseCoins).join(', ')}`);
-  }
-}
-
 async function backfillHistory() {
   console.log('\n' + '='.repeat(50));
   console.log('backfilling 7 days of 1d volume history...');
@@ -158,14 +142,14 @@ async function backfillHistory() {
     try {
       const volumeData = await fetchVolumeData('1d', timestamp);
       volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
-
-      const top10Symbols = volumeData.slice(0, 10).map(v => v.symbol);
+      
+      const top15Symbols = volumeData.slice(0, 15).map(v => v.symbol);
       volumeHistory1d.push({
         timestamp: timestamp,
-        coins: top10Symbols
+        coins: top15Symbols
       });
       
-      console.log(`  ✓ ${top10Symbols.length} coins tracked`);
+      console.log(`  ✓ ${top15Symbols.length} coins tracked`);
     } catch (error) {
       console.log(`  ✗ failed - ${error.message}`);
     }
@@ -173,42 +157,22 @@ async function backfillHistory() {
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   
-  updateExclusionList();
-  
-  console.log(`\n✓ backfill complete!`);
-  console.log('='.repeat(50) + '\n');
-}
-
-async function dailyExclusionCheck() {
-  console.log('\n' + '='.repeat(50));
-  console.log(`daily exclusion check at ${new Date().toLocaleTimeString()}`);
-  console.log('='.repeat(50));
-  
-  try {
-    console.log('fetching current 1d volume data...');
-    const volumeData = await fetchVolumeData('1d');
-    volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
-
-    const top10Symbols = volumeData.slice(0, 10).map(v => v.symbol);
-    volumeHistory1d.push({
-      timestamp: Date.now(),
-      coins: top10Symbols
+  const baseCoinCounts = {};
+  volumeHistory1d.forEach(record => {
+    record.coins.forEach(symbol => {
+      const baseCoin = getBaseCoin(symbol);
+      baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
     });
-    
-    console.log(`✓ added today's top 10: ${top10Symbols.join(', ')}`);
-    
-    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-    volumeHistory1d = volumeHistory1d.filter(record => record.timestamp >= sevenDaysAgo);
-    
-    console.log(`✓ keeping ${volumeHistory1d.length} days of history`);
-    updateExclusionList();
-    
-    lastDailyCheckTime = new Date();
-    console.log(`✓ daily check complete at ${lastDailyCheckTime.toLocaleTimeString()}`);
-    console.log('='.repeat(50) + '\n');
-  } catch (error) {
-    console.error('daily check failed:', error.message);
-  }
+  });
+  
+  Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
+    if (count >= 5) {
+      excludedBaseCoins.add(baseCoin);
+    }
+  });
+  
+  console.log(`\n✓ backfill complete! ${excludedBaseCoins.size} coins will be excluded`);
+  console.log('='.repeat(50) + '\n');
 }
 
 async function updateVolumeCache() {
@@ -222,21 +186,47 @@ async function updateVolumeCache() {
     for (const tf of timeframes) {
       console.log(`fetching ${tf} volume data...`);
       const volumeData = await fetchVolumeData(tf);
-      volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
       
-      const filteredData = volumeData.filter(coin => !shouldExcludeCoin(coin.symbol));
+      if (tf === '1d') {
+        const sortedForHistory = [...volumeData].sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
+        const top15Symbols = sortedForHistory.slice(0, 15).map(v => v.symbol);
+        
+        volumeHistory1d.push({
+          timestamp: Date.now(),
+          coins: top15Symbols
+        });
+        
+        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        volumeHistory1d = volumeHistory1d.filter(record => record.timestamp >= sevenDaysAgo);
+        
+        const baseCoinCounts = {};
+        volumeHistory1d.forEach(record => {
+          record.coins.forEach(symbol => {
+            const baseCoin = getBaseCoin(symbol);
+            baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
+          });
+        });
+        
+        excludedBaseCoins.clear();
+        Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
+          if (count >= 5) {
+            excludedBaseCoins.add(baseCoin);
+          }
+        });
+      }
       
-      volumeCache[tf].topVolume = filteredData.slice(0, 10);
+      const allSortedData = volumeData.sort((a, b) => b.volumeTimeframe - a.volumeTimeframe);
       
-      // selling pressure: filter negative price change, sort by volume (highest first)
-      const sellingPressureData = filteredData
-        .filter(coin => coin.priceChange < 0)
-        .sort((a, b) => b.volumeTimeframe - a.volumeTimeframe)
-        .slice(0, 10);
+      const topVolumeFiltered = allSortedData.filter(coin => !shouldExcludeCoin(coin.symbol));
+      volumeCache[tf].topVolume = topVolumeFiltered.slice(0, 10);
+
+      const topLosersFiltered = allSortedData
+        .filter(coin => !shouldExcludeCoin(coin.symbol))
+        .filter(coin => coin.priceChange < 0);
       
-      volumeCache[tf].sellingPressure = sellingPressureData;
+      volumeCache[tf].topLosingVolume = topLosersFiltered.slice(0, 10);
       
-      const excluded = volumeData.length - filteredData.length;
+      const excluded = allSortedData.length - allSortedData.filter(coin => !shouldExcludeCoin(coin.symbol)).length;
       console.log(`✓ ${tf} updated - ${volumeData.length} contracts (${excluded} regulars excluded)`);
     }
     
@@ -266,10 +256,10 @@ function formatPrice(price) {
   return `$${price.toFixed(6)}`.replace(/\.?0+$/, '');
 }
 
-function createVolumeEmbed(timeframe, data, isHighVolume) {
-  const title = isHighVolume 
+function createVolumeEmbed(timeframe, data, volumeType) {
+  const title = volumeType === 'high'
     ? `Top 10 Volume (${timeframe})`
-    : `Top 10 Selling Pressure (${timeframe})`;
+    : `Top 10 Volume Losers (${timeframe})`;
   
   const lines = data.map((item) => {
     let symbolDisplay = item.symbol.replace('USDT', '');
@@ -295,7 +285,7 @@ function createVolumeEmbed(timeframe, data, isHighVolume) {
   const embed = new EmbedBuilder()
     .setTitle(title)
     .setDescription('```\n' + lines + '\n```')
-    .setColor(isHighVolume ? 0x00ff00 : 0xff0000);
+    .setColor(volumeType === 'high' ? 0x00ff00 : 0xff0000);
   
   if (lastUpdateTime) {
     const timeStr = lastUpdateTime.toLocaleTimeString('en-US', {
@@ -317,7 +307,7 @@ client.once('ready', async () => {
   const commands = [
     {
       name: 'volume',
-      description: 'Show top volume and selling pressure for different timeframes'
+      description: 'Show top 10 highest and lowest volume contracts for different timeframes'
     }
   ];
   
@@ -327,11 +317,11 @@ client.once('ready', async () => {
   } catch (error) {
     console.error('failed to sync commands:', error.message);
   }
+  
   await backfillHistory();
   await updateVolumeCache();
   
   setInterval(updateVolumeCache, 5 * 60 * 1000);
-  setInterval(dailyExclusionCheck, 24 * 60 * 60 * 1000);
 });
 
 process.on('unhandledRejection', (error) => {
@@ -347,8 +337,8 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'volume') {
         const mainEmbed = new EmbedBuilder()
-          .setTitle('📊 Volume & Selling Pressure Dashboard')
-          .setDescription('Green buttons = Top Volume | Red buttons = Top Selling Pressure (high volume dumps)')
+          .setTitle('📊 Top Volume Dashboard')
+          .setDescription('Click a timeframe below to view Top Volume contracts.\n🟢 Green = Top 10 by Volume (All)\n🔴 Red = Top 10 by Volume (Price Losers)')
           .setColor(0x3498db);
         
 		const row1 = new ActionRowBuilder().addComponents(
@@ -360,11 +350,11 @@ client.on('interactionCreate', async interaction => {
 		);
 
 		const row2 = new ActionRowBuilder().addComponents(
-		  new ButtonBuilder().setCustomId('volume_sell_5m').setLabel('5m').setStyle(ButtonStyle.Danger),
-		  new ButtonBuilder().setCustomId('volume_sell_15m').setLabel('15m').setStyle(ButtonStyle.Danger),
-		  new ButtonBuilder().setCustomId('volume_sell_1h').setLabel('1h').setStyle(ButtonStyle.Danger),
-		  new ButtonBuilder().setCustomId('volume_sell_4h').setLabel('4h').setStyle(ButtonStyle.Danger),
-		  new ButtonBuilder().setCustomId('volume_sell_1d').setLabel('1d').setStyle(ButtonStyle.Danger)
+		  new ButtonBuilder().setCustomId('volume_losing_5m').setLabel('5m').setStyle(ButtonStyle.Danger),
+		  new ButtonBuilder().setCustomId('volume_losing_15m').setLabel('15m').setStyle(ButtonStyle.Danger),
+		  new ButtonBuilder().setCustomId('volume_losing_1h').setLabel('1h').setStyle(ButtonStyle.Danger),
+		  new ButtonBuilder().setCustomId('volume_losing_4h').setLabel('4h').setStyle(ButtonStyle.Danger),
+		  new ButtonBuilder().setCustomId('volume_losing_1d').setLabel('1d').setStyle(ButtonStyle.Danger)
 		);
 		
         if (!interaction.replied && !interaction.deferred) {
@@ -381,19 +371,19 @@ client.on('interactionCreate', async interaction => {
         
         const data = volumeType === 'high' 
           ? volumeCache[timeframe]?.topVolume 
-          : volumeCache[timeframe]?.sellingPressure;
+          : volumeCache[timeframe]?.topLosingVolume;
         
         if (!data || data.length === 0) {
           if (!interaction.replied && !interaction.deferred) {
             return interaction.reply({
-              content: 'Data is still loading, please wait...',
+              content: 'Data is still loading, or no coins match the "loser" criteria for this timeframe. Please wait...',
               flags: MessageFlags.Ephemeral
             });
           }
           return;
         }
         
-        const embed = createVolumeEmbed(timeframe, data, volumeType === 'high');
+        const embed = createVolumeEmbed(timeframe, data, volumeType);
         
         if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({ 
