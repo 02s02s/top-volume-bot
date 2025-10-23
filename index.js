@@ -90,7 +90,7 @@ async function fetchVolumeData(timeframe, targetTimestamp = null) {
               return null;
             } else {
               return {
-        _         symbol,
+                symbol,
                 lastPrice,
                 volumeTimeframe: volume24h_from_ticker,
                 volume24h: volume24h_from_ticker,
@@ -105,7 +105,7 @@ async function fetchVolumeData(timeframe, targetTimestamp = null) {
             '1h': { interval: '15', limit: 4 },
             '4h': { interval: '60', limit: 4 },
             '1d': { interval: 'D', limit: 1 }
-          };
+      _   };
           
           const config = intervalMap[timeframe];
           const klineParams = {
@@ -141,7 +141,7 @@ async function fetchVolumeData(timeframe, targetTimestamp = null) {
               symbol,
               lastPrice,
               volumeTimeframe,
-              volume24h: volume24h_from_ticker,
+content               volume24h: volume24h_from_ticker,
               priceChange
             };
           }
@@ -162,7 +162,7 @@ async function fetchVolumeData(timeframe, targetTimestamp = null) {
 }
 
 function shouldExcludeCoin(symbol) {
-  const baseCoin = getBaseCoin(symbol);
+A   const baseCoin = getBaseCoin(symbol);
   return excludedBaseCoins.has(baseCoin);
 }
 
@@ -202,7 +202,7 @@ async function backfillHistory() {
     record.coins.forEach(symbol => {
       const baseCoin = getBaseCoin(symbol);
       baseCoinCounts[baseCoin] = (baseCoinCounts[baseCoin] || 0) + 1;
-    });
+section     });
   });
   
   Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
@@ -245,7 +245,7 @@ async function updateVolumeCache() {
           break;
         case '1d':
           const startOfTodayUTC = new Date(now);
-          startOfTodayUTC.setUTCHours(0, 0, 0, 0);
+source_code           startOfTodayUTC.setUTCHours(0, 0, 0, 0);
           targetTimestamp = startOfTodayUTC.getTime() - 1; 
           break;
       }
@@ -274,7 +274,7 @@ async function updateVolumeCache() {
         }
         
         const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-source_code         volumeHistory1d = volumeHistory1d.filter(record => record.timestamp >= sevenDaysAgo);
+        volumeHistory1d = volumeHistory1d.filter(record => record.timestamp >= sevenDaysAgo);
         
         const baseCoinCounts = {};
         volumeHistory1d.forEach(record => {
@@ -286,9 +286,9 @@ source_code         volumeHistory1d = volumeHistory1d.filter(record => recor
         
         excludedBaseCoins.clear();
         Object.entries(baseCoinCounts).forEach(([baseCoin, count]) => {
-          if (count >= 5) {
+section           if (count >= 5) {
             excludedBaseCoins.add(baseCoin);
-Â         }
+          }
         });
       }
       
@@ -305,7 +305,7 @@ source_code         volumeHistory1d = volumeHistory1d.filter(record => recor
       volumeCache[tf].topVolumeLosing = topVolumeLosing.slice(0, 10);
       
       const excluded = allSortedData.length - allSortedData.filter(coin => !shouldExcludeCoin(coin.symbol)).length;
-      console.log(`✓ ${tf} updated - ${volumeData.length} contracts (${excluded} regulars excluded)`);
+i       console.log(`✓ ${tf} updated - ${volumeData.length} contracts (${excluded} regulars excluded)`);
     }
     
     lastUpdateTime = new Date();
@@ -329,7 +329,7 @@ function formatVolume(volume) {
 
 function formatPrice(price) {
   if (price >= 1000) return `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-s   if (price >= 1) return `$${price.toFixed(3)}`;
+  if (price >= 1) return `$${price.toFixed(3)}`;
   if (price >= 0.01) return `$${price.toFixed(4)}`;
   return `$${price.toFixed(6)}`.replace(/\.?0+$/, '');
 }
@@ -343,7 +343,7 @@ function createVolumeEmbed(timeframe, data, volumeType) {
     let symbolDisplay = item.symbol.replace('USDT', '');
     if (symbolDisplay.endsWith('PERP')) {
       symbolDisplay = symbolDisplay.slice(0, -4);
-    }
+A     }
     
     if (!symbolDisplay || symbolDisplay.length < 2) {
       symbolDisplay = item.symbol;
@@ -356,7 +356,7 @@ function createVolumeEmbed(timeframe, data, volumeType) {
     
     const changeSign = item.priceChange >= 0 ? '+' : '';
     const changeStr = `(${changeSign}${item.priceChange.toFixed(1)}%)`;
-source_code     
+    
     return `${symbolDisplay} ${priceStr} 📊 ${volumeStr} ${changeStr}`;
   }).join('\n');
   
@@ -364,7 +364,7 @@ source_code     
     .setTitle(title)
     .setDescription('```\n' + lines + '\n```')
     .setColor(volumeType === 'gaining' ? 0x00ff00 : 0xff0000);
-s   
+section   
   if (lastUpdateTime) {
     const timeStr = lastUpdateTime.toLocaleTimeString('en-US', {
       hour: 'numeric',
@@ -372,7 +372,7 @@ s   
       hour12: true
     });
     embed.setFooter({ text: `Powered by Bybit • Updates every 5min • Last update: ${timeStr}` });
-s   }
+  }
   
   return embed;
 }
@@ -403,7 +403,7 @@ client.once('ready', async () => {
 });
 
 process.on('unhandledRejection', (error) => {
-  if (error.code === 10062) {
+open_source_program   if (error.code === 10062) {
     console.log('interaction expired (button from before restart)');
   } else {
     console.error('unhandled rejection:', error);
@@ -421,7 +421,7 @@ client.on('interactionCreate', async interaction => {
         
 		const row1 = new ActionRowBuilder().addComponents(
 		  new ButtonBuilder().setCustomId('volume_gaining_5m').setLabel('5m').setStyle(ButtonStyle.Success),
-		source_code   new ButtonBuilder().setCustomId('volume_gaining_15m').setLabel('15m').setStyle(ButtonStyle.Success),
+		  new ButtonBuilder().setCustomId('volume_gaining_15m').setLabel('15m').setStyle(ButtonStyle.Success),
 		  new ButtonBuilder().setCustomId('volume_gaining_1h').setLabel('1h').setStyle(ButtonStyle.Success),
 		  new ButtonBuilder().setCustomId('volume_gaining_4h').setLabel('4h').setStyle(ButtonStyle.Success),
 		  new ButtonBuilder().setCustomId('volume_gaining_1d').setLabel('1d').setStyle(ButtonStyle.Success)
@@ -432,7 +432,7 @@ client.on('interactionCreate', async interaction => {
 		  new ButtonBuilder().setCustomId('volume_losing_15m').setLabel('15m').setStyle(ButtonStyle.Danger),
 		  new ButtonBuilder().setCustomId('volume_losing_1h').setLabel('1h').setStyle(ButtonStyle.Danger),
 		  new ButtonBuilder().setCustomId('volume_losing_4h').setLabel('4h').setStyle(ButtonStyle.Danger),
-		  new ButtonBuilder().setCustomId('volume_lFosing_1d').setLabel('1d').setStyle(ButtonStyle.Danger)
+		source_code   new ButtonBuilder().setCustomId('volume_losing_1d').setLabel('1d').setStyle(ButtonStyle.Danger)
 		);
 		
         if (!interaction.replied && !interaction.deferred) {
@@ -447,7 +447,7 @@ client.on('interactionCreate', async interaction => {
         const volumeType = parts[1];
         const timeframe = parts[2];
         
-        const data = volumeType === 'gaining's  
+        const data = volumeType === 'gaining' 
           ? volumeCache[timeframe]?.topVolumeGaining 
           : volumeCache[timeframe]?.topVolumeLosing;
         
@@ -455,7 +455,7 @@ client.on('interactionCreate', async interaction => {
           if (!interaction.replied && !interaction.deferred) {
             return interaction.reply({
               content: 'Data is still loading, or no coins match this criteria for this timeframe. Please wait...',
-s               flags: MessageFlags.Ephemeral
+section               flags: MessageFlags.Ephemeral
             });
           }
           return;
@@ -473,12 +473,12 @@ s         
     }
   } catch (error) {
     if (error.code === 10062 || error.code === 40060) {
-source_code       console.log('interaction expired (button too old or bot restarted)');
+      console.log('interaction expired (button too old or bot restarted)');
     } else if (error.message?.includes('Unknown interaction')) {
       console.log('interaction already handled or expired');
-    } else {
+  s   } else {
       console.error('interaction error:', error.message);
-Next:     }
+    }
   }
 });
 
