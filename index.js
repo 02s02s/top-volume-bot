@@ -430,7 +430,7 @@ client.on('interactionCreate', async interaction => {
         const row2 = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('volume_losing_5m').setLabel('5m').setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId('volume_losing_15m').setLabel('15m').setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId('volume_losing_1h').setLabel('1l').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId('volume_losing_1h').setLabel('1h').setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId('volume_losing_4h').setLabel('4h').setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId('volume_losing_1d').setLabel('1d').setStyle(ButtonStyle.Danger)
         );
@@ -445,12 +445,12 @@ client.on('interactionCreate', async interaction => {
       if (interaction.customId.startsWith('volume_')) {
         const parts = interaction.customId.split('_');
         const volumeType = parts[1];
-        const timeframe = parts[2];
+        let timeframe = parts[2]; // Changed to let
         
-        // Fix for the 1h losing button typo
-        if (timeframe === '1l') {
-            timeframe = '1h';
-        }
+        // This logic is no longer needed as the button label and ID are correct
+        // if (timeframe === '1l') {
+        //     timeframe = '1h';
+        // }
         
         const data = volumeType === 'gaining' 
           ? volumeCache[timeframe]?.topVolumeGaining 
